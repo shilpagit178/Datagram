@@ -93,15 +93,23 @@ pip install pytest
 
 ## Build and Run
 
-### Build Instructions (To Be Updated)
+### Command-line app
 
-No build system or build configuration is present. The project can be run directly with Python.
-
-Run the included demonstration from the repository root:
+Send a file through the channel emulator with all three protocols and verify it by SHA-256:
 
 ```bash
-python3 datagram/rto.py
+python -m datagram demo
+python -m datagram demo --protocol sr --loss 0.2 --file photo.jpg
 ```
+
+Two terminals (start the receiver first):
+
+```bash
+python -m datagram receive --port 9101 --peer 127.0.0.1:9100 --out got.bin --protocol sr --loss 0.2
+python -m datagram send    --port 9100 --peer 127.0.0.1:9101 --file photo.jpg --protocol sr --loss 0.2
+```
+
+Options: `--protocol sw|gbn|sr`, `--window`, `--rto`, `--adaptive`, `--reset`, and the channel faults `--loss --corrupt --dup --reorder --delay --jitter`, plus `--seed` for repeatable runs. `python -m datagram --help` lists everything.
 
 ### Run the Tests
 
