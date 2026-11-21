@@ -1,5 +1,7 @@
 import socket
 import time
+import os
+import tempfile
 
 from datagram.packet import Packet, DATA, ACK, FIN
 from datagram.protocols.base import ARQProtocol
@@ -18,10 +20,18 @@ class GoBackN(ARQProtocol):
                  reset_on_retx_ack=False):
         if window < 1:
             raise ValueError("window must be at least 1")
+        if rto <= 0:
+            raise ValueError("rto must be positive")
+        if max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
+        if idle_timeout is not None and idle_timeout < 0:
+            raise ValueError("idle_timeout must be non-negative")
+        if linger is not None and linger < 0:
+            raise ValueError("linger must be non-negative")
         self.sock = sock
         self.channel = channel
         self.window = window
-        self.est = est or RTOEstimator(fixed=rto)
+        self.est = est if est is not None else RTOEstimator(fixed=rto)
         self.tracker = RTTTracker(self.est, reset_on_retx_ack=reset_on_retx_ack)
         self.rto = rto
         # max_retries = consecutive timeouts WITHOUT progress before giving up.
@@ -173,40 +183,50 @@ class GoBackN(ARQProtocol):
         fin_seq = None
         last_valid = time.monotonic()
 
-        with open(path, "wb") as f:
-            while fin_seq is None:
-                remaining = self.idle_timeout - (time.monotonic() - last_valid)
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"receiver idle for {self.idle_timeout}s, "
-                        f"expected seq={expected}"
-                    )
-                try:
-                    pkt = self._recv_packet(remaining)
-                except socket.timeout:
-                    continue
-                if pkt is None:
-                    continue              # corrupt or reset: ignore
-                if not (pkt.flags & (DATA | FIN)):
-                    continue              # not a data-side packet
-                last_valid = time.monotonic()
+        directory = os.path.dirname(os.path.abspath(path))
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=directory, prefix=os.path.basename(path) + ".", suffix=".part",
+            delete=False,
+        ) as f:
+            temp_path = f.name
+            try:
+                while fin_seq is None:
+                    remaining = self.idle_timeout - (time.monotonic() - last_valid)
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"receiver idle for {self.idle_timeout}s, "
+                            f"expected seq={expected}"
+                        )
+                    try:
+                        pkt = self._recv_packet(remaining)
+                    except socket.timeout:
+                        continue
+                    if pkt is None:
+                        continue
+                    if not (pkt.flags & (DATA | FIN)):
+                        continue
+                    last_valid = time.monotonic()
 
-                if pkt.seq == expected and (pkt.flags & FIN):
-                    self._send_ack(pkt.seq)
-                    fin_seq = pkt.seq
-                elif pkt.seq == expected and (pkt.flags & DATA):
-                    f.write(pkt.payload)  # in order: write exactly once
-                    delivered += len(pkt.payload)
-                    expected += 1
-                    self._send_ack(pkt.seq)
-                else:
-                    # Out of order or duplicate: never write it. Re-ACK the
-                    # LAST IN-ORDER packet (cumulative), not this packet's seq.
-                    if pkt.seq < expected:
-                        self.stats["retransmissions"] += 1
-                    if expected > 0:
-                        self._send_ack(expected - 1)
-                    # expected == 0: nothing in order yet, ack -1 can't be sent
+                    if pkt.seq == expected and (pkt.flags & FIN):
+                        self._send_ack(pkt.seq)
+                        fin_seq = pkt.seq
+                    elif pkt.seq == expected and (pkt.flags & DATA):
+                        f.write(pkt.payload)
+                        delivered += len(pkt.payload)
+                        expected += 1
+                        self._send_ack(pkt.seq)
+                    else:
+                        if pkt.seq < expected:
+                            self.stats["retransmissions"] += 1
+                        if expected > 0:
+                            self._send_ack(expected - 1)
+            except Exception:
+                f.close()
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+                raise
 
         elapsed = time.monotonic() - start    # BEFORE lingering
 
@@ -226,6 +246,7 @@ class GoBackN(ARQProtocol):
                 self._send_ack(fin_seq)
                 end = time.monotonic() + self.linger
 
+        os.replace(temp_path, path)
         return {
             "packets_sent": self.stats["packets_sent"],
             "retransmissions": self.stats["retransmissions"],

@@ -1,5 +1,7 @@
 import socket
 import time
+import os
+import tempfile
 from datagram.rto import RTOEstimator
 from datagram.timers import RTTTracker
 from datagram.packet import Packet, DATA, ACK, FIN
@@ -175,37 +177,49 @@ class StopAndWait(ARQProtocol):
         fin_seq = None
         last_valid = time.monotonic()
 
-        with open(path, "wb") as f:
-            while fin_seq is None:
-                remaining = self.idle_timeout - (time.monotonic() - last_valid)
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"receiver idle for {self.idle_timeout}s, expected seq={expected}"
-                    )
+        directory = os.path.dirname(os.path.abspath(path))
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=directory, prefix=os.path.basename(path) + ".", suffix=".part",
+            delete=False,
+        ) as f:
+            temp_path = f.name
+            try:
+                while fin_seq is None:
+                    remaining = self.idle_timeout - (time.monotonic() - last_valid)
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"receiver idle for {self.idle_timeout}s, expected seq={expected}"
+                        )
+                    try:
+                        pkt = self._recv_packet(remaining)
+                    except socket.timeout:
+                        continue
+                    if pkt is None:
+                        continue
+                    last_valid = time.monotonic()
+
+                    if pkt.flags & FIN:
+                        if pkt.seq == expected:
+                            self._send_ack(pkt.seq)
+                            fin_seq = pkt.seq
+                        continue
+
+                    if pkt.flags & DATA:
+                        if pkt.seq == expected:
+                            f.write(pkt.payload)
+                            bytes_delivered += len(pkt.payload)
+                            expected += 1
+                            self._send_ack(pkt.seq)
+                        elif pkt.seq < expected:
+                            self.stats["retransmissions"] += 1
+                            self._send_ack(pkt.seq)
+            except Exception:
+                f.close()
                 try:
-                    pkt = self._recv_packet(remaining)
-                except socket.timeout:
-                    continue  # loop re-checks the idle deadline
-                if pkt is None:
-                    continue  # corrupt or reset: ignore
-                last_valid = time.monotonic()
-
-                if pkt.flags & FIN:
-                    if pkt.seq == expected:
-                        self._send_ack(pkt.seq)
-                        fin_seq = pkt.seq
-                    continue
-
-                if pkt.flags & DATA:
-                    if pkt.seq == expected:
-                        f.write(pkt.payload)           # new data: write once
-                        bytes_delivered += len(pkt.payload)
-                        expected += 1
-                        self._send_ack(pkt.seq)
-                    elif pkt.seq < expected:
-                        self.stats["retransmissions"] += 1
-                        self._send_ack(pkt.seq)        # duplicate: re-ACK, no write
-                    # seq > expected cannot happen in stop-and-wait: ignore
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+                raise
 
         elapsed = time.monotonic() - start  # measured BEFORE lingering
 
@@ -226,6 +240,7 @@ class StopAndWait(ARQProtocol):
                 self._send_ack(pkt.seq)
                 end = time.monotonic() + self.linger   # slide the window
 
+        os.replace(temp_path, path)
         return {
             "packets_sent": self.stats["packets_sent"],
             "retransmissions": self.stats["retransmissions"],

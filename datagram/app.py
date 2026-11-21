@@ -10,7 +10,6 @@ channel emulator (loss, corruption, ...), and compares SHA-256 of the file that
 went in with the file that came out. PASS means every byte arrived, in order.
 """
 import argparse
-import hashlib
 import os
 import socket
 import sys
@@ -22,17 +21,23 @@ from datagram.protocols.gbn import GoBackN
 from datagram.protocols.sr import SelectiveRepeat
 from datagram.protocols.stop_wait import StopAndWait
 from datagram.rto import RTOEstimator
+import hashlib
 
 NAMES = {"sw": "Stop-and-Wait", "gbn": "Go-Back-N", "sr": "Selective Repeat"}
 
 
+def status(mark, message):
+    """Print a compact, terminal-friendly lifecycle message."""
+    print(f"[{mark}] {message}")
+
+
 def sha256_file(path):
-    """Fingerprint of a whole file: equal fingerprints mean equal bytes."""
-    h = hashlib.sha256()
+    """Return the SHA-256 fingerprint of a file."""
+    digest = hashlib.sha256()
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(65536), b""):
-            h.update(block)
-    return h.hexdigest()
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def missing_file(path):
@@ -145,12 +150,17 @@ def cmd_receive(a):
     sock.bind((a.host, a.port))
     peer = parse_peer(a.peer)
     proto = build(a.protocol, sock, make_channel(sock, peer, a, a.seed + 1000), a)
-    print(f"[receive] {NAMES[a.protocol]} listening on {a.host}:{a.port}, writing to {a.out}")
+    status("~", f"{NAMES[a.protocol]} listening on {a.host}:{a.port}")
+    print(f"    output: {a.out}")
     try:
         stats = proto.receive_file(a.out)
+    except (OSError, TimeoutError, ValueError) as e:
+        status("x", f"receive failed: {e}")
+        return 1
     finally:
         sock.close()
-    print(f"[receive] done: {stats['bytes_delivered']:,} bytes | sha256 {sha256_file(a.out)}")
+    status("+", f"received {stats['bytes_delivered']:,} bytes in {stats['elapsed_s']:.2f}s")
+    print(f"    sha256: {sha256_file(a.out)}")
     return 0
 
 
@@ -161,14 +171,18 @@ def cmd_send(a):
     sock.bind((a.host, a.port))
     peer = parse_peer(a.peer)
     proto = build(a.protocol, sock, make_channel(sock, peer, a, a.seed), a)
-    print(f"[send] {NAMES[a.protocol]} {a.file} -> {a.peer}")
-    print(f"[send] source sha256 {sha256_file(a.file)}")
+    status(">", f"{NAMES[a.protocol]} sending {a.file}")
+    print(f"    peer: {a.peer}")
+    print(f"    source sha256: {sha256_file(a.file)}")
     try:
         stats = proto.send_file(a.file)
+    except (OSError, TimeoutError, ValueError) as e:
+        status("x", f"send failed: {e}")
+        return 1
     finally:
         sock.close()
-    print(f"[send] done: {stats['bytes_delivered']:,} bytes | {stats['packets_sent']} packets sent | "
-          f"{stats['retransmissions']} retransmissions | {stats['elapsed_s']:.2f} s")
+    status("+", f"sent {stats['bytes_delivered']:,} bytes in {stats['elapsed_s']:.2f}s")
+    print(f"    packets: {stats['packets_sent']} | retransmissions: {stats['retransmissions']}")
     return 0
 
 
@@ -197,7 +211,7 @@ def build_parser():
 
     d = sub.add_parser("demo", help="send a file through a bad network and verify it")
     common(d, choices=("all", "sw", "gbn", "sr"), default="all")
-    d.set_defaults(loss=0.2)          # the demo shows a bad network by default
+    d.set_defaults(loss=0.0)          # clean transfer by default; faults are opt-in
     d.add_argument("--file", help="file to send (default: random bytes)")
     d.add_argument("--size", type=int, default=50 * 1024, help="random file size in bytes")
     d.set_defaults(func=cmd_demo)

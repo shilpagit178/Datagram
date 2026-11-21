@@ -1,5 +1,7 @@
 import socket
 import time
+import os
+import tempfile
  
 from datagram.packet import Packet, DATA, ACK, FIN
 from datagram.protocols.base import ARQProtocol
@@ -119,14 +121,26 @@ class SelectiveRepeat(ARQProtocol):
     """Runs SRSender / SRReceiver over a real socket and a Channel."""
  
     def __init__(self, sock, channel, window=8, rto=0.5, est=None,
-                 max_retries=60, idle_timeout=5.0, linger=None, reset_on_retx_ack=False):
+                 max_retries=60, idle_timeout=None, linger=None, reset_on_retx_ack=False):
+        if window < 1:
+            raise ValueError("window must be at least 1")
+        if rto <= 0:
+            raise ValueError("rto must be positive")
+        if max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
+        if idle_timeout is not None and idle_timeout < 0:
+            raise ValueError("idle_timeout must be non-negative")
+        if linger is not None and linger < 0:
+            raise ValueError("linger must be non-negative")
         self.sock = sock
         self.channel = channel                  # anything with .send(bytes) and .pump()
         self.window = window
-        self.est = est or RTOEstimator()        # est=RTOEstimator(fixed=x) -> fixed baseline
+        self.est = est if est is not None else RTOEstimator()
         self.tracker = RTTTracker(self.est, reset_on_retx_ack=reset_on_retx_ack)
         self.max_retries = max_retries          # total transmissions per packet
-        self.idle_timeout = idle_timeout        # receiver: max silence before giving up
+        # receiver: max silence before giving up. Default 3x the largest RTO the estimator
+        # can back off to, so a backed-off sender is never mistaken for a dead one.
+        self.idle_timeout = 3 * self.est.max_rto if idle_timeout is None else idle_timeout
         # After the FIN is delivered, keep re-ACKing until this much silence
         self.linger = 10 * rto if linger is None else linger
         self._reset_stats()
@@ -273,5 +287,20 @@ class SelectiveRepeat(ARQProtocol):
         }
  
     def receive_file(self, path):
-        with open(path, "wb") as f:
-            return self.receive_chunks(f.write)
+        directory = os.path.dirname(os.path.abspath(path))
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=directory, prefix=os.path.basename(path) + ".", suffix=".part",
+            delete=False,
+        ) as f:
+            temp_path = f.name
+            try:
+                stats = self.receive_chunks(f.write)
+            except Exception:
+                f.close()
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+                raise
+        os.replace(temp_path, path)
+        return stats
