@@ -47,7 +47,8 @@ def plot_goodput_vs_loss():
         plt.plot(rows["loss"] * 100, rows["goodput_bps"] / 1000,   # x in %, y in kbit/s
                  marker="o", color=COLORS[p], label=NAMES[p])
 
-    plt.title(f"Goodput vs packet loss\nwindow {df['window'].iloc[0]}, {settings_note(df)}",
+    plt.title(f"Goodput vs packet loss\nStop-and-Wait window 1; "
+              f"windowed protocols window 8, {settings_note(df)}",
               fontsize=10)
     plt.xlabel("Packet loss (%)")
     plt.ylabel("Goodput (kbit/s)")
@@ -98,8 +99,9 @@ def plot_retx_vs_reorder():
         plt.plot(rows["reorder"] * 100, rows["retransmissions"],
                  marker="o", color=COLORS[p], label=NAMES[p])
 
-    plt.title(f"Retransmissions vs reordering probability\nloss {df['loss'].iloc[0] * 100:.0f}%, "
-              f"window {df['window'].iloc[0]}, {settings_note(df)}", fontsize=10)
+    plt.title(f"Retransmissions vs reordering probability\nloss "
+              f"{df['loss'].iloc[0] * 100:.0f}%, Stop-and-Wait window 1; "
+              f"windowed protocols window 8, {settings_note(df)}", fontsize=10)
     plt.xlabel("Reordering probability (%)")
     plt.ylabel("Retransmissions per transfer")
     plt.legend()

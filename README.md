@@ -114,9 +114,10 @@ python -m experiments.plots        # writes results/*.png and prints the claim a
 What the data shows (mean of 5 seeds):
 
 - **Windowed protocols beat Stop-and-Wait everywhere.** At 0% loss, about 1.7 Mbit/s against about 0.25 Mbit/s.
-- **Selective Repeat's goodput lead over Go-Back-N is small and uneven.** Go-Back-N is slightly ahead at 5% loss (about 0.87 vs 0.81 Mbit/s). Selective Repeat is ahead at 10-30% loss, by about 0.02-0.07 Mbit/s, but only at 20% and 25% loss is the gap larger than the seed-to-seed spread.
-- **Window size.** Go-Back-N is ahead at windows 2 and 4. Selective Repeat is ahead on average from window 8, within the seed-to-seed noise; at window 32 it reaches about 1.19 Mbit/s against about 0.59 Mbit/s.
-- **Retransmissions.** Go-Back-N's rise with window size (47 at window 8, 106 at 32) while Selective Repeat's stay at 12, and under reordering Go-Back-N goes from about 16 to about 117 against 5 to 9.
+- **Selective Repeat leads Go-Back-N at moderate and high loss.** Fresh averages: at 10, 15, 20, 25 and 30% loss, SR is about 0.460, 0.339, 0.311, 0.256 and 0.174 Mbit/s versus GBN at 0.422, 0.317, 0.241, 0.184 and 0.154 Mbit/s. At 5% loss GBN remains slightly ahead.
+- **Both windowed protocols beat Stop-and-Wait.** Stop-and-Wait averages 0.140 Mbit/s at window 1. GBN is 0.263-0.606 Mbit/s and SR is 0.206-1.251 Mbit/s at windows 2-32.
+- **Window size.** GBN is ahead at windows 2 and 4. SR is ahead at windows 8, 16 and 32; the practical conclusion is a clear SR advantage only at larger windows in this sweep.
+- **Retransmissions.** Mean retransmissions rise under reordering for GBN from 15.8 to 116.6 from 0% to 30%. SR stays from 4.8 to 8.8 over the same range.
 - **Adaptive RTO loses to a fixed 0.05 s timeout** on this emulated link: about 0.32 vs 0.70 Mbit/s at 10% loss, and 0.027 vs 0.288 Mbit/s at 30% loss. Backoff-reset improves the adaptive result to about 0.42 Mbit/s at 10% loss and 0.286 Mbit/s at 20% loss.
 - **The fresh exp4 sweep has no failed trials.** All 100 RTO-variant runs completed and matched SHA-256, including all five seeds at 30% loss.
 
