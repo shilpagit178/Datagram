@@ -36,17 +36,19 @@ def make_protocol(name, sock, chan, window=8, rto=0.1, adaptive=False, reset=Fal
     # by accident. For all three, the timeout comes from the estimator (est);
     # rto only sets the linger. Fixed -> RTOEstimator(fixed=rto).
     est = RTOEstimator(min_rto=0.05) if adaptive else RTOEstimator(fixed=rto)
+    # The receiver must outlive the longest backed-off wait, or a lost final ACK strands the sender.
+    linger = est.max_rto if adaptive else None
 
     if name == "gbn":
         from datagram.protocols.gbn import GoBackN   # imported here, only when asked for
         return GoBackN(sock, chan, window=window, rto=rto, max_retries=60,
-                       est=est, reset_on_retx_ack=reset)
+                       est=est, reset_on_retx_ack=reset, linger=linger)
     if name == "sw":
-        assert not reset, "reset_on_retx_ack exists only in Selective Repeat"
-        return StopAndWait(sock, chan, rto=rto, max_retries=60, est=est)
+        return StopAndWait(sock, chan, rto=rto, max_retries=60, est=est,
+                           reset_on_retx_ack=reset, linger=linger)
     if name == "sr":
         return SelectiveRepeat(sock, chan, window=window, rto=rto, max_retries=60,
-                               est=est, reset_on_retx_ack=reset)
+                               est=est, reset_on_retx_ack=reset, linger=linger)
     raise ValueError(f"unknown protocol: {name}")
 
 
@@ -67,6 +69,8 @@ def run_trial(protocol, seed, loss, window, reorder, file_size,
     # delay is ONE-way, applied in both directions. With delay=0 the ACK comes
     # back instantly on localhost, so a bigger window shows no benefit.
     # rto should stay above 2 * delay, otherwise the timer fires before the ACK.
+
+    window_used = 1 if protocol == "sw" else window   # Stop-and-Wait has no window: it is 1
     with tempfile.TemporaryDirectory() as folder:
         src = os.path.join(folder, "src.bin")
         dst = os.path.join(folder, "dst.bin")
@@ -132,7 +136,7 @@ def run_trial(protocol, seed, loss, window, reorder, file_size,
     #       the receiver's counters are ACKs sent and duplicates seen)
     # Case: bytes_delivered -> RECEIVER (what actually arrived)
     return {
-        "protocol": protocol, "seed": seed, "loss": loss, "window": window,
+        "protocol": protocol, "seed": seed, "loss": loss, "window": window_used,
         "reorder": reorder, "delay": delay, "file_size": file_size,
         "rto": "adaptive" if adaptive else rto,
         "reset_backoff": reset,
